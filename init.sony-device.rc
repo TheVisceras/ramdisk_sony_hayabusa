@@ -1,0 +1,5 @@
+service touchd /system/bin/touchd
+    class main
+
+on early-boot
+   exec /system/bin/sh /system/etc/clearpad_fwloader.sh

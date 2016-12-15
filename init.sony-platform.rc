@@ -1,0 +1,228 @@
+import init.sony-device.rc
+
+on init
+    # USB related initialization
+    write /sys/class/android_usb/android0/iSerial ${ro.serialno}
+    write /sys/class/android_usb/android0/f_rndis/manufacturer ${ro.product.manufacturer}
+    write /sys/class/android_usb/android0/f_rndis/vendorID 0fce
+    write /sys/class/android_usb/android0/f_rndis/wceis 1
+
+    # See storage config details at http://source.android.com/tech/storage/
+    mkdir /storage 0550 system sdcard_r
+
+    # Internal SDcard partition mount points.
+    mkdir /mnt/int_storage 0000 system system
+    mkdir /storage/sdcard0 0000 system system
+    export EXTERNAL_STORAGE /storage/sdcard0
+
+    # Internal SDcard links
+    symlink /storage/sdcard0 /sdcard
+    symlink /storage/sdcard0 /mnt/sdcard
+
+    # External SDcard mountpoint
+    export SECONDARY_STORAGE /storage/sdcard1
+    mkdir /storage/sdcard1 0000 system system
+    symlink /storage/sdcard1 /sdcard1
+    symlink /storage/sdcard1 /ext_card
+
+    # External USB mass storage support
+    export EXTERNAL_STORAGE_USB /storage/usbdisk
+    mkdir /storage/usbdisk 0000 system system
+    symlink /storage/usbdisk /mnt/usbdisk
+    symlink /storage/usbdisk /usbdisk
+
+on fs
+    # Sony: Start the TrimArea Daemon and early TA-users
+    class_start trimarea
+    exec /sbin/wait4tad_static
+
+    # Sony: Start FOTA update agent right after filesystems are mounted
+    exec /sbin/fota-ua c
+
+    exec /system/bin/sh /system/etc/init.qcom.modem_links.sh
+    exec /system/bin/sh /system/etc/init.qcom.mdm_links.sh
+
+    exec /sbin/mr
+    exec /system/bin/taimport
+    start ta_qmi_service
+    exec /sbin/checkabortedflash
+
+    # Sony: Remote storage service should be started after master reset
+    # due to that the modem file system is formatted in the master reset
+    start rmt_storage
+    # USB gadget initial setup
+    write /sys/class/android_usb/android0/iManufacturer ${ro.product.manufacturer}
+    write /sys/class/android_usb/android0/iProduct ${ro.product.model}
+
+    # usbeng
+    exec /system/bin/usbeng
+    
+
+on post-fs
+   chmod 0770 /mnt/int_storage
+   chown root sdcardd /mnt/int_storage
+   mkdir /mnt/int_storage/.android_secure 0700 root root
+
+    # Start suntrold early
+    start suntrold
+
+on early-boot
+    #Run pre_hw_config.sh before entering charge only mode.
+    exec /system/bin/sh /system/etc/pre_hw_config.sh
+    #Start secchan daemon service before entering charge only mode.
+    start secchan
+    # Start the offline charging (This blocks booting further in some cases)
+    exec /system/bin/chargemon
+    write /sys/module/pm8921_charger/parameters/enable_lowbatt_detect 1
+
+    # Permissions for AKM897x sensor
+    chown system system /data/misc/akm_set.txt
+    chown system system /sys/class/compass/akm8972/interval
+    chown system system /sys/class/compass/akm8972/single
+    chown system system /sys/class/compass/akm8972/registers
+
+on boot
+    
+    
+
+    # Owner for the proximity sensor
+    chown system system /sys/devices/i2c-12/12-0054/threshold
+    chown system system /sys/devices/i2c-12/12-0054/nburst
+    # AS3676/Ambient Light Sensor
+    chown system system /sys/devices/i2c-10/10-0040/als_on
+
+    # LM3560/cameralight
+    chown system system /sys/devices/i2c-10/10-0053/torch_enable
+    chown system system /sys/devices/i2c-10/10-0053/torch_current
+    chown system system /sys/devices/i2c-10/10-0053/privacy_enable
+    chown system system /sys/devices/i2c-10/10-0053/privacy_current
+    chown system system /sys/devices/i2c-10/10-0053/flash_enable
+    chown system system /sys/devices/i2c-10/10-0053/flash_duration
+    chown system system /sys/devices/i2c-10/10-0053/flash_synchronization
+    chown system system /sys/devices/i2c-10/10-0053/flash_current
+    chown system system /sys/devices/i2c-10/10-0053/status
+
+
+    #Start calibration for Gyroscope
+    exec /system/bin/cal_data_manager
+
+    # Configurate TCP/IP kernel settings
+    exec /system/bin/sh /system/etc/init.netconfig.sh
+
+    # Enable Wi-Fi EAP SIM
+    setprop ro.wifi.eap_sim_enabled true
+
+    # Do not power down SIM in flight mode (required for Wi-Fi EAP-SIM)
+    setprop persist.radio.apm_sim_not_pwdn 1
+
+on property:sys.usb.config=mass_storage
+    exec /init.usbmode.sh
+    stop adbd
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=mass_storage,adb
+    exec /init.usbmode.sh
+    start adbd
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=mtp
+    exec /init.usbmode.sh
+    stop adbd
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=mtp,adb
+    exec /init.usbmode.sh
+    start adbd
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=mtp,cdrom
+    exec /init.usbmode.sh
+    stop adbd
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=mtp,cdrom,adb
+    exec /init.usbmode.sh
+    stop adbd
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=rndis
+    exec /init.usbmode.sh
+    stop adbd
+    setprop sys.usb.state ${sys.usb.config}
+
+on property:sys.usb.config=rndis,adb
+    exec /init.usbmode.sh
+    start adbd
+    setprop sys.usb.state ${sys.usb.config}
+
+#Sony: TrimArea Daemon
+# last 2 args: start block(blk size 128k), number of blocks(partitionsize(kb) /128(kb))
+service tad_static /sbin/tad_static /dev/block/mmcblk0 1,16
+    user root
+    group root
+    socket tad stream 0660 system system
+    class trimarea
+
+# Trim Area QMI service
+service ta_qmi_service /system/bin/ta_qmi_service
+    user root
+    disabled
+
+service illumination /system/bin/illumination_service
+    socket illumination stream 0666 root system
+    class main
+    user root
+
+service hw_config /system/bin/sh /system/etc/hw_config.sh
+    class main
+    user root
+    oneshot
+
+# User 2800: sdcardd
+service sdcardd /system/bin/sdcard /mnt/int_storage /storage/sdcard0 2800 2800
+    user root
+    group sdcard_rw
+    disabled
+
+service updatemiscta /system/bin/updatemiscta
+    class main
+    user root
+    oneshot
+
+# Regulatory domain handling
+service iw_command /system/bin/iw
+    disabled
+    oneshot
+
+
+
+
+
+
+
+# use system_monitor
+on init
+    symlink /dev/socket /tmp
+
+service system_monitor /system/bin/system_monitor
+    socket sysmon stream 0660 root system
+    class core
+    user root
+
+# DxHDCP key provisioning
+on property:dev.bootcomplete=1
+   start dxhdcpd
+service dxhdcpd /system/bin/dxhdcpd
+   user system
+   group system
+   oneshot
+   disabled
+
+on property:dev.bootcomplete=1
+    start setssflagbc
+
+# Set the startup flag to boot complete, run on property change
+service setssflagbc /system/bin/startupflag bootcomplete
+    user root
+    oneshot
+    disabled
